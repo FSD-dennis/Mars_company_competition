@@ -1,0 +1,417 @@
+---
+title: "mars_pet"
+author: "Yuang Guo"
+date: "2023-10-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+#environment setting
+##clean
+```{r}
+
+  rm(list = ls()) # Clear all files from your environment
+  gc()            # Clear unused memory
+  cat("\f")       # Clear the console
+  graphics.off()  # Clear all graphs
+```
+
+##package
+```{r}
+packages <- c("psych",       # quick summary stats for data exploration,
+              "stargazer",   # summary stats,
+              "summarytools",# summary stats,
+              "naniar",      # for visualisation of missing data,
+              "visdat",      # for visualisation of missing data,
+              "VIM",         # for visualisation of missing data,
+              "DataExplorer",# for visualisation of missing data,
+              "tidyverse",   # data manipulation like selecting variables,
+              "fastDummies", # Create dummy variables using fastDummies,
+              "corrplot",    # correlation plots,
+              "ggplot2",     # graphing,
+              "data.table",  # reshape for graphing, 
+              "car",
+              "seasonal",
+              "fpp3",
+              "tsibble",    # vif for multicollinearity
+              "cli",
+              "crayon",
+              "dplyr",
+              "fable",
+              "fabletools",
+              "feasts",
+              "lubridate",
+              "magrittr",
+              "purrr",
+              "rstudioapi",
+              "tibble",
+              "tidyr",
+              "tsibbledata",
+              "latex2exp",
+              "GGally",
+              "broom",
+              "zoo"
+              )
+
+
+for (i in 1:length(packages)) {
+  if (!packages[i] %in% rownames(installed.packages())) {
+    install.packages(packages[i]
+                     , repos = "http://cran.rstudio.com/"
+                     , dependencies = TRUE
+                     )
+  }
+  library(packages[i], character.only = TRUE)
+}
+
+rm(packages)
+```
+
+#data introduction
+##import data
+```{r}
+setwd(getwd())
+rawdata = read.csv("petfood_retail_table.csv")
+```
+
+#Monthly Time series data prediction
+```{r}
+#create dataset for manufacturer id and monthly data aggregate
+manu_mars <- rawdata |> filter(MANU_ID == "MARS") |> 
+                        mutate(DATE = yearmonth(DATE)) |>
+                        mutate(transaction = PRICE*UNITS) |>  
+                        group_by(DATE) |>
+                        summarise(transaction = sum(transaction))
+
+manu_mars_monthly_tsibble <- as_tsibble(manu_mars, index = "DATE")
+manu_mars_monthly_tsibble
+##turn to tsibble
+```
+
+##easy autolpot map
+```{r}
+manu_mars_monthly_tsibble |> filter(!is.na(transaction)) |>                                                                                gg_tsdisplay(transaction,plot_type = "partial")
+```
+use gg_tsdisplay to show the ACF and PACF
+There is no evidence of changing variance, so we will not do a Box-Cox transformation.
+
+```{r}
+monthly_dcmp <- manu_mars_monthly_tsibble |> filter(!is.na(transaction)) |>
+                model(stl = STL(transaction))
+components(monthly_dcmp) |> autoplot()
+```
+
+I don't think we will try log transformation in this place
+maybe we can try??
+First we should remove inflation??
+
+KPSS test first
+```{r}
+manu_mars_monthly_tsibble |>
+  features(transaction, unitroot_kpss)
+```
+Consequently, small p-values (e.g., less than 0.05) suggest that differencing is required. 
+
+We need to make difference first to eliminate the seasonal influence
+using the unitroots
+```{r}
+manu_mars_monthly_tsibble |> features(transaction, unitroot_nsdiffs)
+manu_mars_monthly_tsibble |> features(transaction, unitroot_ndiffs)
+```
+0 suggests no seasonal differencing
+1 suggests we should do both a first difference.
+Then let's do first differencing and test kpss again
+finally we replace the data
+```{r}
+manu_mars_monthly_tsibble |> mutate(transaction = difference(transaction)) |>
+                             features(transaction, unitroot_kpss)
+manu_mars_monthly_tsibble_first_differencing <- manu_mars_monthly_tsibble |> mutate(transaction = difference(transaction))
+```
+
+
+```{r}
+manu_mars_monthly_tsibble_first_differencing |> filter(!is.na(transaction)) |>                                                                                gg_tsdisplay(transaction,plot_type = "partial")
+```
+But acf is still awful in the previous periods
+Then we have solved the data problems now
+It's enough!!!! Based on this map we can choose p,q for ARIMA(p,d,q)
+When looking at ACF plot, we ignore the long spike at lag 0 
+For PACF, the line usually starts at 1.
+In this ACF and PACF maps, not tail off, but only cut off,
+we find the spike for ACF shows MA(1) and MA(3)
+we find the spike for PACF shows AR(1) and AR(2)
+Then is the combination of those a ARMA models
+Then because we have first_differencing for once, we will have ARIMA(p,1,q) model for this regression model
+Then we can create our model
+##ARIMA models
+```{r}
+arima_fit <- manu_mars_monthly_tsibble |> 
+             filter(!is.na(transaction)) |> 
+             model(
+                   arima110 = ARIMA(transaction ~ pdq(1,1,0)),
+                   arima013 = ARIMA(transaction ~ pdq(0,1,3)),
+                   arima011 = ARIMA(transaction ~ pdq(0,1,1)),
+                   arima210 = ARIMA(transaction ~ pdq(2,1,0)),
+                   stepwise = ARIMA(transaction),
+                   SARIMA   = ARIMA(transaction ~ pdq(2,1,0) + PDQ(1,0,0,12)),
+                   search = ARIMA(transaction, stepwise=FALSE)
+  )
+arima_fit
+glance(arima_fit) |> arrange(AICc) |> dplyr::select(.model:BIC)
+```
+```{r}
+arima_fit |> dplyr::select(arima013) |> gg_tsresiduals()
+```
+The residuals of this model looks good
+
+```{r}
+augment(arima_fit) |> filter(.model == "arima013") |> features(.innov, ljung_box, lag = 10, dof = 3)
+```
+A portmanteau test (setting  K=3, because p+q =3) returns a large p-value, also suggesting that the residuals are white noise.
+Then we can make predictions now
+```{r}
+forecast_arima <- arima_fit |> forecast(h= "2 years") |> filter(.model=='arima013')
+augment(arima_fit)
+```
+
+##CHECK FOR THE SEASONALITY 
+
+```{r}
+acf(manu_mars_monthly_tsibble)
+monthly_acf <- manu_mars_monthly_tsibble_first_differencing |> filter(!is.na(transaction))
+acf(monthly_acf)
+#still a little bit seasonality but not seasonal differencing! Fuck I have ruined all the thing
+```
+
+##another way to check the seasonality
+```{r}
+Box.test(manu_mars_monthly_tsibble$transaction, type = "Ljung-Box")
+```
+this is a really seasonality data
+The Box.test function is part of the base R package, yeah
+NULL hypothesis: this is a non-seasonal data
+
+##auto.arima
+```{r}
+final_arima_model <- forecast::auto.arima(manu_mars_monthly_tsibble, stepwise = FALSE, approximation = FALSE, seasonal = TRUE)
+summary(final_arima_model)
+```
+
+##TRYING TO EXPLAIN THIS MODEL
+
+
+??how to show the interval on the graph
+??how to add the first differencing
+Then lets add back the trend
+
+finally we have our model based on the Yale's sharing pdf
+https://people.duke.edu/~rnau/411arim.htm
+
+trying to write some analysis on that
+
+
+Then is to draw our prediction maps
+##FINAL MODEL AND PREDICTION
+```{r}
+final_arima_model <- forecast::auto.arima(manu_mars_monthly_tsibble, stepwise = FALSE, approximation = FALSE, seasonal = TRUE)
+forecast_arima <- forecast(final_arima_model, h = 24)
+forecast_arima
+#manu_mars_monthly_tsibble |> autoplot(transaction) + autolayer(transacto)
+#colnames(forecast_arima) 
+#manu_mars_monthly_tsibble |> autoplot(transaction) + autolayer(forecast_arima)
+```
+
+```{r}
+la <- manu_mars_monthly_tsibble |>
+    model(auto_arima = ARIMA(transaction ~ 0 + pdq(2,1,0) + PDQ(1,0,0))) |>
+    forecast(h = 24) 
+# rewrite that into a model
+manu_mars_monthly_tsibble |>
+    model(auto_arima = ARIMA(transaction ~ 0 + pdq(2,1,0) + PDQ(1,0,0))) |>
+    forecast(h = 24) |>
+    autoplot(manu_mars_monthly_tsibble)
+#augment(la)
+```
+It's weird, I use two ways to show the data there???
+
+##predictioN 
+
+SLIDES AND DRAFT
+
+
+I need to summarize the model and figure out when to use in the model.
+
+#REVISION
+should we remove inflation
+SHOULD WE CONCERNED ABOUT THWE RANDOM FOREST
+SHOULD WE ADD SOME DIFFERENT PREDICTIONS FOR OTHERS COMPANY
+SHOULD WE ADD THE PLOT TOGETHER TRYING TO COMPARE SOMETHING
+
+#JUST SOME LITTLE TRYINGS(IGNORE)
+
+
+
+```{r eval=FALSE, include=FALSE}
+start_date <- as.yearmon("2023-01")
+end_date <- as.yearmon("2024-12")
+YEAR1 <- manu_mars_monthly_tsibble |> filter(year(DATE)%in% c("2020", "2021"))
+YEAR1$DATE <- YEAR1$DATE + 36
+YEAR1$DATE
+augment_arima <- augment(arima_fit) |> filter(.model=='arima013')
+delta <- forecast_arima$.mean
+mean(delta)
+delta[1]
+fact <- 0
+monthly_predicted_mean <- numeric(24)  # Initialize an empty numeric vector
+for (i in 1:24) {
+  fact <- fact + delta[i]
+  monthly_predicted_mean[i] <- fact
+}
+monthly_predicted_mean <- monthly_predicted_mean + 314.96
+#CREATE A DATA FRAME AND PUT THIS DATA TOGETHER
+forecast_arima$.mean <- forecast_arima$.mean + monthly_predicted_mean
+#manu_mars_monthly_tsibble  |> autoplot(.mean) + ggplot(aes = (x = YEAR1$DATE , y = forecast_arima$.mean))
+FORECAST_DATA = c("DATE","transaction")
+FORECAST_DATA$DATE <- YEAR1$DATE
+FORECAST_DATA$transaction <- forecast_arima$.mean
+FORECAST_DATA <- data.frame(FORECAST_DATA)
+FORECAST_DATA <- FORECAST_DATA[c("DATE","transaction")]
+FORECAST_DATA |> as_tsibble(index = DATE) |> autoplot()
+combined_tsibble <- bind_rows(manu_mars_monthly_tsibble, FORECAST_DATA)
+combined_tsibble |> autoplot()
+```
+
+```{r}
+
+
+
+```
+
+
+BE CAREFUL TO DEAL WITH THE FIRST MISSING DATA IN DIFFRENCING USING !is.na(factor)
+##use multiple models to predict
+```{r}
+#then is prediction, together with metrics  little bit seasonal
+#arima ets each has lots of arguments
+#add some senario forecastings
+fit_monthly <- manu_mars_monthly_tsibble_first_differencing |> filter(!is.na(transaction)) |> model(
+               ETS = ETS(transaction ~ error("A") + trend("A") + season("A"))
+               )
+monthly_forecast <- forecast(fit_monthly, h = 24)
+manu_mars_monthly_tsibble_first_differencing |> autoplot(transaction) + autolayer(monthly_forecast)  #add something else
+```
+How can we add the differencing data back?
+How to use that: Hyndman-Khandakar algorithm for automatic ARIMA modelling
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#NO WEEKLY DATA ANYMORE
+
+##test
+portmanteau test ?
+AIC BIC AICc
+
+#Weekly time series data prediction
+
+##data set create
+```{r eval=FALSE, include=FALSE}
+manu_mars <- rawdata |> filter(MANU_ID == "MARS") |> 
+                        select(MANU_ID,DATE,PRICE,UNITS) |>
+                        mutate(DATE = yearweek(DATE)) |>
+                        mutate(transaction = PRICE*UNITS) |>
+                        group_by(MANU_ID,DATE) |>
+                        summarise(transaction = sum(transaction)) |>
+                        select(MANU_ID,DATE,transaction) 
+manu_mars_weekly_tsibble <- as_tsibble(manu_mars, index = DATE)
+manu_mars_weekly_tsibble
+```
+
+kpss first
+```{r eval=FALSE, include=FALSE}
+manu_mars_weekly_tsibble |> features(transaction,unitroot_kpss)
+```
+bad, let's nsdiff
+```{r eval=FALSE, include=FALSE}
+manu_mars_weekly_tsibble |> features(transaction,unitroot_nsdiffs)
+manu_mars_weekly_tsibble |> features(transaction,unitroot_ndiffs)
+```
+no need to seasonal differencing, only first differencing now. The test kpss and replace that instead
+```{r eval=FALSE, include=FALSE}
+manu_mars_weekly_tsibble |> mutate(transaction = difference(transaction)) |> features(transaction,unitroot_kpss)
+manu_mars_weekly_tsibble_first_differencing <- manu_mars_weekly_tsibble  |> mutate(transaction = difference(transaction)) 
+```
+
+
+
+
+## 3 breakdowns for trend
+```{r eval=FALSE, include=FALSE}
+weekly_dcmp <- manu_mars_weekly_tsibble_first_differencing |>
+                model(stl = STL(transaction))
+components(weekly_dcmp) |> autoplot()
+```
+
+```{r eval=FALSE, include=FALSE}
+fit_weekly <- manu_mars_weekly_tsibble_first_differencing |> model(
+               ETS = ETS(transaction ~ error("A") + trend("A") + season("N")),
+               SARIMA = ARIMA(tsib, xreg = fourier(K = 6))
+               )
+weekly_forecast <- forecast(fit_weekly, h = 12)
+manu_mars_monthly_tsibble_first_differencing |> autoplot(transaction) + autolayer(weekly_forecast)  #add something else
+```
+
+```{r eval=FALSE, include=FALSE}
+# Load the required libraries
+library(forecast)
+
+# Create a sample time series dataset
+set.seed(123)
+ts_data <- ts(rnorm(100), frequency = 12)  # Monthly data with 100 observations
+
+# Split the data into training and testing sets
+train_data <- window(ts_data, start = 1, end = 80)  # First 80 observations for training
+test_data <- window(ts_data, start = 1, end = 100)  # The remaining 20 observations for testing
+
+# Fit an ARIMA model using auto.arima
+auto_arima_model <- auto.arima(train_data)
+
+# Generate forecasts for the testing set
+forecasted_values <- forecast(auto_arima_model, h = length(test_data))
+
+# Print the point forecasts and prediction intervals
+print(forecasted_values)
+
+```
+
+LFO CV

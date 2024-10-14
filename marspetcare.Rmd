@@ -1,0 +1,191 @@
+---
+title: "Marpetcare"
+author: "Yuang Guo"
+date: "2023-10-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Clear Environment
+
+Start with a clean slate.
+
+```{r, echo=TRUE, results='hide'}
+
+# Clear the workspace
+
+  rm(list = ls()) # Clear all files from your environment
+  gc()            # Clear unused memory
+  cat("\f")       # Clear the console
+  graphics.off()  # Clear all graphs
+  
+  
+```
+
+## Load packages
+
+Now, I will load the packages.
+
+```{r packages, echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE, results='hide'}
+
+# Prepare needed libraries
+
+packages <- c("psych",       # quick summary stats for data exploration,
+              "stargazer",   # summary stats,
+              "summarytools",# summary stats,
+              "naniar",      # for visualisation of missing data,
+              "visdat",      # for visualisation of missing data,
+              "VIM",         # for visualisation of missing data,
+              "DataExplorer",# for visualisation of missing data,
+              "tidyverse",   # data manipulation like selecting variables,
+              "fastDummies", # Create dummy variables using fastDummies,
+              "corrplot",    # correlation plots,
+              "ggplot2",     # graphing,
+              "data.table",  # reshape for graphing, 
+              "car",
+              "png",
+              "jpeg",
+              "esquisse",
+              "knitr"# vif for multicollinearity
+              )
+
+for (i in 1:length(packages)) {
+  if (!packages[i] %in% rownames(installed.packages())) {
+    install.packages(packages[i]
+                     , repos = "http://cran.rstudio.com/"
+                     , dependencies = TRUE
+                     )
+  }
+  library(packages[i], character.only = TRUE)
+}
+
+rm(packages)
+
+```
+
+#This is used to see the libpath of the library
+.libPaths()
+
+```{r}
+wd = getwd()
+setwd("C:/Users/guoyy/OneDrive/Desktop/Program/Mars_petcare/me")
+df <- read.csv("petfood_retail_table.csv")
+```
+
+ls()
+
+list.files(wd)
+
+```{r}
+str(df)
+vis_dat(df)
+
+naniar::gg_miss_var(df)
+```
+
+
+```{r eval=FALSE, include=FALSE}
+
+Amelia::missmap(obj = df)
+
+VIM::aggr(df)
+VIM::matrixplot(df)
+
+DataExplorer::plot_missing(df)
+```
+
+# for inspecting each data
+```{r}
+clean <- df
+#this gives a copy of data
+```
+
+```{r}
+# Splitting into year, month, and day
+date_parts <- strsplit(clean$DATE, "-")
+
+# Extracting year and month
+clean$years  <- as.numeric(sapply(X = date_parts, FUN = function(x) x[1]))
+clean$months <- as.numeric(sapply(X = date_parts, FUN = function(x) x[2]))
+clean$days   <- as.numeric(sapply(X = date_parts, FUN = function(x) x[3]))
+# table(clean$days)
+
+# Create a bar chart
+
+barplot(table(clean$years), 
+        main = "Counts of Transactions in the year", 
+        xlab = "Year", 
+        ylab = "Count", 
+        col = "darkblue"
+        )
+
+barplot(table(clean$months), 
+        main = "Counts of Transactions in the month", 
+        xlab = "Months", 
+        ylab = "Count", 
+        col = "blue"
+        )
+table(clean$years, clean$months)
+
+clean2 <- clean %>% filter(years >= 2020)
+barplot(table(clean2$months) , 
+        main = "Counts of Transactions in the month (Entire Years)", 
+        xlab = "Months", 
+        ylab = "Count", 
+        col = "blue"
+        )
+
+barplot(table(clean$days), 
+        main = "Counts of Transactions by days", 
+        xlab = "Day", 
+        ylab = "Count", 
+        col = "lightblue"
+        )
+```
+
+# shopper ID
+```{r}
+describe(clean$SHOPPER_ID)
+
+sorted_shopper_table_desc <- 
+sort(x = table(clean$SHOPPER_ID),
+     decreasing = TRUE )
+
+# Create a bar plot
+barplot(sorted_shopper_table_desc[1:50],
+        main = "Transactions by top 50 shoppers",
+        xlab = "SHOPPER_ID",
+        ylab = "Count",
+        col = "green",
+        las = 2,  # Rotate x-axis labels vertically
+        names.arg = names(sorted_shopper_table_desc[1:50]),  # Specify x-axis labels
+        cex.names = 0.4  # Adjust the font size of x-axis labels
+)
+```
+
+```{r}
+df_g <- data.frame(
+  Name = c("Alice", "Bob", "Charlie"),
+  Age = c(28, 32, 24),
+  Score = c(92, 85, 78)
+)
+sort(x = table(df_g$Age),decreasing = FALSE)
+```
+```{r}
+getwd()
+
+#![gg.](lalala/vita.jpg)
+!(lalala/vita.jpg)
+img <- readJPEG("lalala/vita.jpg")  # Load your image
+image(img)
+```
+
+
+(lalala/vita.jpg)
+
+library(esquisse)
+esquisser()
+

@@ -1,0 +1,360 @@
+---
+title: "Mars Competition _ Forecast Part_ZS (LZ)"
+author: "Lin Zhang"
+date: "2023-10-23"
+output: word_document
+---
+
+
+```{r}
+# Set up my working directory and data locations
+setwd("D:\\Boston College\\Applied Economics\\04-2023 Fall\\03-Competition Project")   
+getwd()
+# Clear my programming work space
+  rm(list = ls()) # Clear environment
+  gc()            # Clear unused memory
+  cat("\f")       # Clear the console
+  dev.off         # Clear the charts
+  ls()
+```
+
+
+```{r}
+# If the packages are not available locally, try to install them via internet.
+packages <- c("fpp3","tsibble", "fable", "visdat", "ggplot2",  "dplyr", "stargazer","gridExtra","forecast", "car", "MASS", "openxlsx", "lubridate", "zoo")
+
+  for (i in 1:length(packages)) {
+   if (!packages[i] %in% rownames(installed.packages())) {
+       install.packages(packages[i]
+                       , repos = "http://cran.rstudio.com/"
+                       , dependencies = TRUE
+                       )
+    }
+    library(packages[i], character.only = TRUE)
+  }
+rm(packages)
+```
+
+
+```{r}
+Sales_data          <- read.csv("petfood_retail_table_forecast.csv")
+```
+
+
+```{r}
+summary(Sales_data)                 # Display the key parameters of import data set.
+str(Sales_data)                     # Display the structure of the data set, including the name, data type, and first few values of each variable.
+colSums(is.na(Sales_data))      # See how many missing values are in each variable
+```
+
+
+```{r}
+# Convert to DATE format
+Sales_data$DATE <- as.Date(Sales_data$DATE, format = "%Y/%m/%d")
+
+# List the different manufacture's monthly sales amount.
+Monthly_Sales_data <- Sales_data %>%
+  group_by(MANU_ID, YearMonth = format(DATE, "%Y-%m")) %>%
+  summarise(Total_Sales = sum(SALES))
+
+# List all manufactures' total monthly sales amount.
+Total_Monthly_Sales <- Monthly_Sales_data %>%
+  group_by(YearMonth) %>%
+  summarise(Total_Sales = sum(Total_Sales))
+
+# View the data
+View(Monthly_Sales_data)
+View(Total_Monthly_Sales)
+```
+
+```{r}
+# Plot the different Manufactures's monthtly sales.
+ggplot(data = Monthly_Sales_data, aes(x = YearMonth, y = Total_Sales, color = MANU_ID, group = MANU_ID)) +
+  geom_line(aes(size = ifelse(MANU_ID == "MARS", "MARS", "Others"))) +  # define the line size of MARS
+  labs(title = "Monthly Sales by MANU_ID", y = "Total Sales") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1) ) +
+  scale_size_manual(values = c("MARS" = 1.5, "Others" = 0.6))
+```
+
+```{r}
+# filter the MARS monthly sales data from Monthly_Sales_data data set.
+MARS_Monthly_Sales_data <- Monthly_Sales_data %>%
+  filter(MANU_ID == "MARS")
+MARS_Monthly_Sales_data <- MARS_Monthly_Sales_data %>%
+  rename(DATE = YearMonth)
+
+# Save the MARS monthly sales data into a new CSV
+write.csv(MARS_Monthly_Sales_data, file = "MARS_Monthly_Sales_data.csv")
+```
+
+
+```{r, echo=TRUE}
+# Convert the data to time series.
+mytimeseries <- MARS_Monthly_Sales_data |>
+     mutate(DATE = yearmonth(DATE)) |>
+     as_tsibble(index = DATE)
+
+# display the converted data.
+str(mytimeseries)
+head(mytimeseries)
+tail(mytimeseries)
+```
+
+```{r}
+library(fpp3)
+
+mytimeseries |>
+  model(STL(Total_Sales ~ season(window = "periodic"))) |>
+  components() |>
+  autoplot() + labs(title = "STL decomposition: MARS Monthly Sales")
+
+stl_dcmp <- mytimeseries |>
+  model(STL(Total_Sales ~ season(window = "periodic"))) |>
+  components() |>
+  autoplot() + labs(title = "STL decomposition: MARS Monthly Sales")
+```
+
+
+```{r}
+# ACF plot 
+acf(mytimeseries$Total_Sales)
+```
+
+
+```{r}
+#mytimeseries$DATE <- as.Date(mytimeseries$DATE, format = "%Y-%m-%d")
+ts_data <- ts(mytimeseries$Total_Sales, frequency = 12)
+
+# Set the font for the following R codes.
+windowsFonts(Arial = windowsFont("Arial"))
+
+
+# Output the sub series plot
+ggseasonplot(ts_data, polar = TRUE) +
+  xlab("Month") +
+  ylab("Millions of Dollars") +
+  ggtitle("Seasonal chart: MARS Monthly Sales") +
+  theme(text = element_text(family = "Arial")) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+```{r}
+# Output the sub series plot
+ggsubseriesplot(ts_data, year.labels = TRUE, year.labels.left = TRUE) +
+  xlab("Month") +
+  ylab("Millions of Dollars") +
+  ggtitle("Seasonal chart: MARS Monthly Sales") +
+  theme(text = element_text(family = "Arial")) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+
+```{r}
+
+# Monthly data.
+ts_data_lag <- window(ts_data, start = end(ts_data) - 11)
+gglagplot(ts_data_lag, year.labels = TRUE, year.labels.left = TRUE) +
+  xlab("Month") +
+  ylab("Dollars") +
+  ggtitle("Seasonal chart: MARS Monthly Sales") +
+  theme(text = element_text(family = "Arial")) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+# Quarterly data.
+# Convert the monthly data to quarter data.
+mytimeseries$DATE <- as.Date(mytimeseries$DATE, format = "%Y-%m-%d")
+
+# Sum up the monthly data to quarter data.
+ts_data_quarterly <- aggregate(Total_Sales ~ floor_date(DATE, "quarter"), data = mytimeseries, sum)
+
+# Create the quarter time series data.
+ts_data_quarterly <- ts(ts_data_quarterly$Total_Sales, frequency = 4)
+
+# Output the lag chart.
+gglagplot(ts_data_quarterly, year.labels = TRUE, year.labels.left = TRUE) +
+  xlab("Quarter") +
+  ylab("Dollars") +
+  ggtitle("Lag plot: MARS Quarterly Sales") +
+  theme(text = element_text(family = "Arial")) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+```{r}
+fit_ets <- ets(ts_data)
+summary(fit_ets)
+
+autoplot(fit_ets)
+
+cbind('Residuals' = residuals(fit_ets), 
+      'Forecast errors' = residuals(fit_ets, type='response')) %>%
+      autoplot(facet=TRUE) + xlab("Year") + ylab("") +
+      theme(text = element_text(family = "Arial")) +
+      theme(plot.title = element_text(hjust = 0.5))
+
+checkresiduals(fit_ets)
+
+```
+
+
+```{r}
+# # Dived ts_data to train data set and test data set.
+train_ratio <- 0.8  # Set the ratio of the train data.
+train_length <- round(length(ts_data) * train_ratio)
+train_data <- ts_data[1:train_length]
+test_data <- ts_data[(train_length + 1):length(ts_data)]
+
+# Train by ETS method
+fit_ets <- ets(train_data)
+
+# Forecast the test data with the trained ets model
+forecast_values_ets <- forecast(fit_ets, h = length(test_data))
+
+# Create a data frame, including both test data set and forecast data.
+comparison_data <- data.frame(
+  Year = time(test_data),
+  Test_Data = as.numeric(test_data),
+  Forecast_ets = as.numeric(forecast_values_ets$mean)
+)
+
+# Output the plot of test data and ets forecast data.
+ggplot(comparison_data, aes(x = Year)) +
+  geom_line(aes(y = Test_Data, color = "Test Data")) +
+  geom_line(aes(y = Forecast_ets, color = "Forecast_ets")) +
+  labs(x = "Year", y = "Value") +
+  scale_color_manual(values = c("Test Data" = "blue", "Forecast_ets" = "red")) +
+  theme_minimal()
+
+# Evaluate the accuracy of ets model's forecast.
+accuracy_values_ets <- accuracy(forecast_values_ets$mean, test_data)
+print(accuracy_values_ets)
+```
+
+
+
+
+```{r}
+fit_ets %>% forecast(h=12) %>%
+  autoplot() +
+  xlab("Date") +
+  ylab("MARS Monthly Sales(Dollars)") +
+  ggtitle('Based on ETS(A,Ad,N) forecast model') +
+  theme(text = element_text(family = "Arial")) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+```{r}
+# get 12 months sales forecast by ets model
+forecast_ets_result <- fit_ets %>% forecast(h = 12)
+
+# get 80% and 95% confidence interval value.
+lower_80 <- forecast_ets_result$lower[, "80%"]
+upper_80 <- forecast_ets_result$upper[, "80%"]
+lower_95 <- forecast_ets_result$lower[, "95%"]
+upper_95 <- forecast_ets_result$upper[, "95%"]
+
+# Create the data frame of the forecast values.
+forecast_ets_data <- data.frame(
+  Date = as.Date(index(forecast_ets_result$mean)),
+  Forecast = forecast_ets_result$mean,
+  Lower_80 = lower_80,
+  Upper_80 = upper_80,
+  Lower_95 = lower_95,
+  Upper_95 = upper_95
+)
+
+# Display the forecast results.
+print(forecast_ets_data)
+```
+
+
+
+
+
+
+
+
+
+```{r}
+fit_arima <- auto.arima(ts_data, seasonal = FALSE, stepwise = FALSE, approximation = FALSE)
+summary(fit_arima)
+
+checkresiduals(fit_arima)
+```
+
+
+```{r}
+# Dived ts_data to train data set and test data set.
+train_ratio <- 0.8  # Define the ratio of the train data.
+train_length <- round(length(ts_data) * train_ratio)
+train_data <- ts_data[1:train_length]
+test_data <- ts_data[(train_length + 1):length(ts_data)]
+
+# Train by ARIMA method
+fit_arima <- auto.arima(train_data, seasonal = FALSE, stepwise = FALSE, approximation = FALSE)
+
+# Forecast the test data with ARIMA method.
+forecast_values_Arima <- forecast(fit_arima, h = length(test_data))
+
+# Create a data frame, including both test data set and ARIMA forecast data.
+comparison_data <- data.frame(
+  Year = time(test_data),
+  Test_Data = as.numeric(test_data),
+  forecast_Arima = as.numeric(forecast_values_Arima$mean)
+)
+
+# Output the plot of test data and ARIMA forecast data.
+ggplot(comparison_data, aes(x = Year)) +
+  geom_line(aes(y = Test_Data, color = "Test Data")) +
+  geom_line(aes(y = forecast_Arima, color = "Forecast_Arima")) +
+  labs(x = "Year", y = "Value") +
+  scale_color_manual(values = c("Test Data" = "blue", "Forecast_Arima" = "red")) +
+  theme_minimal()
+
+# Evaluate the accuracy of ARIMA forecast method.
+accuracy_values_Arima <- accuracy(forecast_values_Arima$mean, test_data)
+print(accuracy_values_Arima)
+```
+
+
+```{r}
+fit_arima %>% forecast(h=24) %>%
+  autoplot() +
+  xlab("Date") +
+  ylab("MARS Monthly Sales(Dollars)") +
+  ggtitle('Based on ARIMA(2,1,0) model') +
+  theme(text = element_text(family = "Arial")) +
+  theme(plot.title = element_text(hjust = 0.5))
+  
+```
+
+```{r}
+# get 12 months sales forecast by ARIMA model
+forecast_arima_result <- fit_arima %>% forecast(h = 24)
+
+# get 80% and 95% confidence interval value.
+lower_80 <- forecast_arima_result$lower[, "80%"]
+upper_80 <- forecast_arima_result$upper[, "80%"]
+lower_95 <- forecast_arima_result$lower[, "95%"]
+upper_95 <- forecast_arima_result$upper[, "95%"]
+
+# Create the data frame of the forecast values.
+forecast_arima_data <- data.frame(
+  Date = as.Date(index(forecast_arima_result$mean)),
+  Forecast = forecast_arima_result$mean,
+  Lower_80 = lower_80,
+  Upper_80 = upper_80,
+  Lower_95 = lower_95,
+  Upper_95 = upper_95
+)
+
+# Display the forecast results.
+print(forecast_arima_data)
+```
+
+
+

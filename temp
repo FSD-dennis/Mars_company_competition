@@ -1,0 +1,51 @@
+You should add seasonality in the prediction
+
+##autoarima model
+```{r}
+model <- forecast::auto.arima(manu_fmcg_monthly_tsibble, stepwise = FALSE, approximation = FALSE, seasonal = TRUE)
+```
+
+##summary of that model
+```{r}
+summary(model)
+```
+AR: yt - yt-1 = φ1(yt-1 - yt-2) + φ2(yt-2 - yt-3) + et
+SAR[12]: yt = (1 - Φ1B12)et    
+Expaination of this model: (1 - φ1B - φ2B2)(1 - B)(1 - Φ1B12)yt = et
+φ1：-0.9249     φ2：-0.5523   Φ1：-0.3537
+This is our prediction function!
+        
+##Confidence Interval for Forecast
+```{r}
+forecast_arima <- forecast(forecast::auto.arima(manu_fmcg_monthly_tsibble, stepwise = FALSE, approximation = FALSE, seasonal = TRUE), h = 24)
+forecast_arima
+```
+
+##Create teh prediction graph
+```{r}
+manu_fmcg_monthly_tsibble |>
+    model(auto_arima = ARIMA(transaction ~ pdq(2,1,0) + PDQ(1,0,0))) |>
+    forecast(h = 24) |>
+    autoplot(manu_fmcg_monthly_tsibble)
+```
+
+##create some other models
+```{r}
+
+```
+
+
+##metrics(using cv)
+from that we have 48 period of data, what if we add cv in R,
+but I know it's very easy in python
+I think LOOCV is better
+```{r}
+#manu_fmcg_monthly_tsibble_CV <- copy(manu_fmcg_monthly_tsibble)
+#manu_fmcg_monthly_tsibble_CV$DATE <- as.factor(month(manu_fmcg_monthly_tsibble_CV$DATE))
+```
+I will turn python
+Then I need to export the data first
+```{r}
+# Export data to a CSV file using write.table
+write.table(manu_fmcg_monthly_tsibble, file = file_path, sep = ",", col.names = TRUE, row.names = FALSE)
+```
